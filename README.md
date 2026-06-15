@@ -1,34 +1,144 @@
-# 🐕 pj-cerberus (Project Cerberus)
+# pj-cerberus (Project Cerberus)
 
-Claude Proのコストだけで、3つの頭（AI）を連携させ、完全無料で人間超えの安全性を担保するハイブリッド・AIコードレビュー・システム。
+Claude Pro の範囲内で複数の AI とセキュリティツールを組み合わせ、バグ・脆弱性・シークレット漏洩をできるだけ早い段階で検出するマルチレイヤー・コードレビュー構成のメモ。
 
-バグやセキュリティ脆弱性を、決して本番環境へと通さない「地獄の番犬」としての防衛網を構築します。
+## アーキテクチャ概要
 
-## 🏛️ 3つの頭の役割分担（防衛アーキテクチャ）
+コミットの流れに沿って4層でチェックする。
 
-人間がコードの尻拭いをする時代は終わりました。3つの頭がそれぞれの強みを活かしてクロスチェック（議論）を終えた、ほぼ完璧なコードだけを最後に人間が承認する仕組みです。
-
-| 3つの頭 (AI) | 役割 (ペルソナ) | 起動タイミング | コスト |
+| レイヤー | ツール | タイミング | コスト |
 | :--- | :--- | :--- | :--- |
-| **🎨 第1の頭: Claude Code** | メイン実装・司令塔 | ローカル開発時 | Claude Pro 内 |
-| **🌐 第2の頭: Gemini 1.5 Pro** | 過去コード・インフラの広域監視 | コミット・プッシュ前 | **完全無料** (AI Studio API) |
-| **🔍 第3の頭: CodeRabbit / Qodo** | PRのセキュリティ・ロジック襲撃 | GitHub プルリク時 | **完全無料** (個人プラン) |
+| 実装支援 | Claude Code | ローカル開発中 | Claude Pro |
+| pre-commit | detect-secrets / truffleHog | コミット前（ローカル） | 無料 |
+| pre-push | Gemini 2.0 Flash + Semgrep | プッシュ前（ローカル） | 無料 |
+| CI | Semgrep / Dependabot | GitHub Actions | 無料 |
+| PRレビュー | Qodo Merge | プルリクエスト時 | 無料（個人プラン） |
 
-## 🔄 開発ワークフロー（ケルベロス・ループ）
+## 各ツールの役割
 
-**【創造】** ローカルのターミナルで `Claude Code` を使い、機能を高速に実装。
-**【検閲】** プッシュ前に `Claude Code` 経由で `Gemini 1.5 Pro` の100万トークンの記憶力を召喚。システム全体との矛盾や並行処理のバグをセルフ修正。
-**【襲撃】** GitHubにプッシュしてプルリクエスト（PR）を作成。背後で待機していた `CodeRabbit/Qodo` が起動し、ハッカー視点でコードの隙を自動コメント。
-**【門番】** 人間がAI同士の議論の成果を最終確認し、本番環境へのマージボタンを押す。
+### Claude Code（実装フェーズ）
+ローカルで機能実装・リファクタリングを行う。`/code-review` や `/security-review` スラッシュコマンドでセルフレビューも可能。
 
-## 🛠️ セットアップ
+### detect-secrets / truffleHog（シークレットスキャン）
+APIキーやパスワードのコミット混入を防ぐ pre-commit フック。
 
-### 1. 第2の頭（Gemini）のセットアップ
-Google AI Studioで無料のAPIキーを発行
-環境変数に設定: `export GEMINI_API_KEY="your_api_key"`
+```bash
+pip install detect-secrets
+detect-secrets scan > .secrets.baseline
+detect-secrets audit .secrets.baseline
+```
 
-### 2. 第3の頭（CodeRabbit）のセットアップ
-GitHubリポジトリにCodeRabbit（無料版）を連携
+pre-commit フックとして設定すると、コミット時に自動チェックされる。
 
----
-*人間はAIチームの監督（マネジメント）に専念する。*
+### Gemini 2.0 Flash（コードベース全体との整合性チェック）
+100万トークンのコンテキストウィンドウを活かし、変更がコードベース全体の設計・既存ロジックと矛盾していないかを確認する。
+
+Claude Code から Gemini API を呼び出し、変更差分と関連ファイルを渡してレビューさせる（pre-push フック or 手動実行）。
+
+```bash
+export GEMINI_API_KEY="your_api_key"  # Google AI Studio で無料発行
+```
+
+### Semgrep（SAST：静的解析）
+OWASP Top 10 を含む既知の脆弱性パターンを静的解析で検出する。Community 版は無料でプライベートリポジトリにも使用可能。
+
+```bash
+pip install semgrep
+semgrep --config=auto .
+```
+
+GitHub Actions に組み込むと PR ごとに自動実行できる（`.github/workflows/semgrep.yml`）。
+
+### Dependabot（依存関係スキャン）
+使用ライブラリの既知の脆弱性（CVE）を自動検出し、バージョンアップの PR を自動作成する。GitHub 標準機能で、パブリック・プライベート問わず無料。
+
+`.github/dependabot.yml` を作成するだけで有効になる。
+
+### Qodo Merge（PRレビュー）
+プルリクエストに対して AI がロジック・セキュリティ・テストカバレッジの観点でコメントする。CodeRabbit は公開リポジトリ向けの無料プランが中心だが、Qodo は個人プランでプライベートリポジトリにも対応している。
+
+[Qodo Merge](https://www.qodo.ai/products/merge/) を GitHub App として連携するだけで動作する。
+
+## ワークフロー
+
+```
+ローカル実装（Claude Code）
+    ↓
+git commit → detect-secrets / truffleHog がシークレット検出
+    ↓
+git push 前 → Semgrep（ローカル）+ Gemini でレビュー → 問題あれば修正
+    ↓
+git push → GitHub Actions で Semgrep / Dependabot が自動実行
+    ↓
+PR 作成 → Qodo Merge が自動コメント
+    ↓
+人間が最終確認 → マージ
+```
+
+## コスト整理
+
+| ツール | 無料範囲 |
+| :--- | :--- |
+| Claude Code | Claude Pro に含まれる |
+| Gemini 2.0 Flash | AI Studio の無料枠（レートリミットあり） |
+| detect-secrets / truffleHog | 完全無料（OSS） |
+| Semgrep Community | 完全無料（プライベートリポジトリ含む） |
+| Dependabot | GitHub 標準機能（無料） |
+| Qodo Merge | 個人プラン無料（プライベートリポジトリ対応） |
+
+## セットアップ手順
+
+### 1. シークレットスキャン（detect-secrets）
+
+```bash
+pip install detect-secrets pre-commit
+# .pre-commit-config.yaml に設定を追加
+pre-commit install
+```
+
+### 2. Gemini API キー
+
+```bash
+export GEMINI_API_KEY="your_api_key"
+```
+
+### 3. Semgrep（GitHub Actions）
+
+`.github/workflows/semgrep.yml` を作成：
+
+```yaml
+name: Semgrep
+on: [push, pull_request]
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+```
+
+### 4. Dependabot
+
+`.github/dependabot.yml` を作成（言語に合わせて調整）：
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "npm"  # or pip, cargo, etc.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+```
+
+### 5. Qodo Merge
+
+GitHub Marketplace から Qodo Merge を連携するだけで PR 時に自動起動する。
+
+## 注意・限界
+
+- Gemini 呼び出しの具体的なスクリプト（pre-push フック）は別途実装が必要。
+- Semgrep は既知パターンの検出が中心で、アプリ固有のビジネスロジックのバグは検出できない。
+- Dependabot は脆弱性の通知のみで、修正の判断は人間が行う。
+- AI レビュー（Gemini / Qodo）の指摘は正確性の保証がないため、マージ前の人間確認は省略できない。
