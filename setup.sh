@@ -10,7 +10,7 @@ set -e
 
 # pj-vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
 # どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
-VAUBAN_VERSION="1.1.0"
+VAUBAN_VERSION="1.2.0"
 
 TARGET="$1"
 ECOSYSTEM="${2:-none}"
@@ -57,8 +57,9 @@ repos:
     hooks:
       - id: gemini-review
         name: Gemini Code Review
-        entry: python3 scripts/gemini_review.py
-        language: system
+        entry: python scripts/gemini_review.py
+        language: python
+        additional_dependencies: [google-genai]
         stages: [pre-push]
         pass_filenames: false
         always_run: true
@@ -149,7 +150,24 @@ fi
 # 5. pre-commit フックのインストール
 cd "$TARGET"
 
-python3 -m pip install detect-secrets pre-commit google-genai --quiet --user
+# pre-commit 本体と detect-secrets（baseline 生成に使う）を入れる。
+# Gemini レビューの google-genai は .pre-commit-config.yaml 側の
+# additional_dependencies で pre-commit が隔離環境に入れるため、ここでは入れない。
+# PEP 668（externally-managed-environment）対策で段階的にフォールバックする。
+install_deps() {
+  python3 -m pip install pre-commit detect-secrets --quiet --user 2>/dev/null && return 0
+  python3 -m pip install pre-commit detect-secrets --quiet --user --break-system-packages 2>/dev/null && return 0
+  python3 -m pip install pre-commit detect-secrets --quiet --break-system-packages 2>/dev/null && return 0
+  return 1
+}
+if ! install_deps; then
+  echo "✗ pre-commit / detect-secrets のインストールに失敗しました。"
+  echo "  pipx での導入を検討してください:"
+  echo "    pipx install pre-commit && pipx install detect-secrets"
+  echo "  （生成済みの設定ファイルはそのまま残っています）"
+  exit 1
+fi
+echo "✓ pre-commit / detect-secrets インストール済み"
 
 if [ ! -f ".secrets.baseline" ]; then
   python3 -m detect_secrets scan \
