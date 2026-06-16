@@ -91,17 +91,24 @@ fi
 # 5. pre-commit フックのインストール
 cd "$TARGET"
 
-pip install detect-secrets pre-commit google-generativeai --quiet
+python3 -m pip install detect-secrets pre-commit google-generativeai --quiet --user
 
 if [ ! -f ".secrets.baseline" ]; then
-  detect-secrets scan > .secrets.baseline
+  python3 -m detect_secrets scan \
+    --exclude-files 'node_modules/.*' \
+    --exclude-files '\.venv/.*' \
+    --exclude-files 'vendor/.*' \
+    --exclude-files '__pycache__/.*' \
+    --exclude-files 'dist/.*' \
+    --exclude-files 'build/.*' \
+    > .secrets.baseline
   echo "✓ .secrets.baseline（新規生成）"
 else
   echo "✓ .secrets.baseline（既存を維持）"
 fi
 
-pre-commit install
-pre-commit install --hook-type pre-push
+python3 -m pre_commit install
+python3 -m pre_commit install --hook-type pre-push
 echo "✓ pre-commit フック（commit + push）インストール済み"
 
 echo ""
