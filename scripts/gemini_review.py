@@ -5,7 +5,7 @@ import subprocess
 
 # pj-vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
 # setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 def get_diff() -> str:
@@ -44,6 +44,7 @@ def review(diff: str) -> str:
 
     try:
         from google import genai
+        from google.genai import types
     except ImportError:
         print("[Gemini] google-genai 未インストールのためスキップします。", file=sys.stderr)
         return ""
@@ -74,12 +75,19 @@ def review(diff: str) -> str:
     # 例: gemini-2.5-flash / gemini-flash-latest など（要・最新の無料枠確認）
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
+    # pre-push フックなので、API が応答しないと push がハングする。
+    # 必ずタイムアウトを設け、超過時は例外→スキップして push を通す。
+    timeout_ms = int(os.environ.get("GEMINI_TIMEOUT_MS", "20000"))
+
     try:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=timeout_ms),
+        )
         response = client.models.generate_content(model=model, contents=prompt)
-        return response.text
+        return response.text or ""
     except Exception as e:
-        print(f"[Gemini] APIエラーのためスキップします: {e}", file=sys.stderr)
+        print(f"[Gemini] スキップします（API エラー / タイムアウト）: {e}", file=sys.stderr)
         return ""
 
 
