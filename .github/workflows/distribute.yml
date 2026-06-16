@@ -52,4 +52,4 @@ jobs:
           distribute podcast    pip
           distribute sora       pip
           distribute mcp-jp     none
-          distribute brewdrop   none
+          distribute brew-drop  none
