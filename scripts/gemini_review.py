@@ -3,6 +3,10 @@ import sys
 import os
 import subprocess
 
+# pj-vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
+# setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
+__version__ = "1.1.0"
+
 
 def get_diff() -> str:
     # push 対象（= ローカルにあって push 先にまだ無い変更）を優先的に拾う。
@@ -80,6 +84,10 @@ def review(diff: str) -> str:
 
 
 if __name__ == "__main__":
+    if "--version" in sys.argv:
+        print(f"pj-vauban gemini_review {__version__}")
+        sys.exit(0)
+
     diff = get_diff()
 
     if not diff:

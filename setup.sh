@@ -8,12 +8,22 @@
 
 set -e
 
+# pj-vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
+# どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
+VAUBAN_VERSION="1.1.0"
+
 TARGET="$1"
 ECOSYSTEM="${2:-none}"
 VAUBAN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+if [ "$TARGET" = "--version" ] || [ "$TARGET" = "-v" ]; then
+  echo "pj-vauban $VAUBAN_VERSION"
+  exit 0
+fi
+
 if [ -z "$TARGET" ]; then
   echo "Usage: bash setup.sh <target-repo-path> [npm|pip|none]"
+  echo "       bash setup.sh --version"
   exit 1
 fi
 
@@ -24,6 +34,9 @@ fi
 
 TARGET="$(cd "$TARGET" && pwd)"
 echo "Setting up pj-vauban in: $TARGET (ecosystem: $ECOSYSTEM)"
+echo ""
+
+echo "pj-vauban version: $VAUBAN_VERSION"
 echo ""
 
 # 1. scripts/gemini_review.py
@@ -148,6 +161,12 @@ if [ ! -f ".secrets.baseline" ]; then
     --exclude-files 'build/.*' \
     > .secrets.baseline
   echo "✓ .secrets.baseline（新規生成）"
+  echo ""
+  echo "  ⚠️ baseline には『生成時点で見つかった秘密』が既知として登録され、"
+  echo "     以後スキャンから除外される。既存の本物の鍵が紛れていないか必ず棚卸しを:"
+  echo "       python3 -m detect_secrets audit .secrets.baseline"
+  echo "     本物が見つかったら baseline で蓋をせず、鍵をローテーションすること。"
+  echo ""
 else
   echo "✓ .secrets.baseline（既存を維持）"
 fi
