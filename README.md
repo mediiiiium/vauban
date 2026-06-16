@@ -1,4 +1,4 @@
-# pj-vauban
+# vauban
 
 Claude Code・Gemini・Qodo Merge と静的解析ツールを組み合わせたマルチレイヤーコードレビュー構成の設計メモ。
 

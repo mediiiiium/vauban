@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# pj-vauban managed — setup.sh が各リポジトリに配布します。再実行で上書きされます。
+# vauban managed — setup.sh が各リポジトリに配布します。再実行で上書きされます。
 import sys
 import os
 import subprocess
 
-# pj-vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
+# vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
 # setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
 __version__ = "1.4.0"
 
@@ -116,7 +116,7 @@ def review(diff: str) -> str:
 
 if __name__ == "__main__":
     if "--version" in sys.argv:
-        print(f"pj-vauban gemini_review {__version__}")
+        print(f"vauban gemini_review {__version__}")
         sys.exit(0)
 
     diff = get_diff()

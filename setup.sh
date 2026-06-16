@@ -8,7 +8,7 @@
 
 set -e
 
-# pj-vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
+# vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
 # どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
 VAUBAN_VERSION="1.4.0"
 
@@ -17,7 +17,7 @@ ECOSYSTEM="${2:-none}"
 VAUBAN_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "$TARGET" = "--version" ] || [ "$TARGET" = "-v" ]; then
-  echo "pj-vauban $VAUBAN_VERSION"
+  echo "vauban $VAUBAN_VERSION"
   exit 0
 fi
 
@@ -33,20 +33,20 @@ if [ ! -d "$TARGET/.git" ]; then
 fi
 
 TARGET="$(cd "$TARGET" && pwd)"
-echo "Setting up pj-vauban in: $TARGET (ecosystem: $ECOSYSTEM)"
+echo "Setting up vauban in: $TARGET (ecosystem: $ECOSYSTEM)"
 echo ""
 
-echo "pj-vauban version: $VAUBAN_VERSION"
+echo "vauban version: $VAUBAN_VERSION"
 echo ""
 
 # 生成ファイルにはマーカーを埋め込む。再実行時、マーカーの無い既存ファイル
 # （＝ユーザーが自前で用意した設定）は黙って消さず、.bak に退避してから上書きする。
-MARKER="pj-vauban managed"
+MARKER="vauban managed"
 backup_if_foreign() {
   local f="$1"
   if [ -f "$f" ] && ! grep -q "$MARKER" "$f" 2>/dev/null; then
     cp "$f" "$f.bak"
-    echo "⚠️ 既存の $(basename "$f") は pj-vauban 管理外でした → ${f}.bak に退避して上書きします"
+    echo "⚠️ 既存の $(basename "$f") は vauban 管理外でした → ${f}.bak に退避して上書きします"
     echo "   必要な独自設定は .bak から手動でマージしてください。"
   fi
 }
@@ -60,7 +60,7 @@ echo "✓ scripts/gemini_review.py"
 # 2. .pre-commit-config.yaml
 backup_if_foreign "$TARGET/.pre-commit-config.yaml"
 cat > "$TARGET/.pre-commit-config.yaml" << 'EOF'
-# pj-vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -87,7 +87,7 @@ echo "✓ .pre-commit-config.yaml"
 mkdir -p "$TARGET/.github/workflows"
 backup_if_foreign "$TARGET/.github/workflows/semgrep.yml"
 cat > "$TARGET/.github/workflows/semgrep.yml" << 'EOF'
-# pj-vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
 name: Semgrep
 on:
   push:
@@ -152,7 +152,7 @@ fi
 if [ "$ECOSYSTEM" != "none" ]; then
   backup_if_foreign "$TARGET/.github/dependabot.yml"
   cat > "$TARGET/.github/dependabot.yml" << EOF
-# pj-vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
 version: 2
 updates:
   - package-ecosystem: "$ECOSYSTEM"
