@@ -4,7 +4,7 @@
 # Examples:
 #   bash setup.sh ~/now-on-tap npm
 #   bash setup.sh ~/podcast pip
-#   bash setup.sh ~/brewdrop none
+#   bash setup.sh ~/brew-drop none
 
 set -e
 

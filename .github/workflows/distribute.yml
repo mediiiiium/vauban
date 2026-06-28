@@ -31,18 +31,20 @@ jobs:
       - name: Distribute to all repos
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          gh auth setup-git
           distribute() {
             local repo=$1
             local ecosystem=$2
             echo "=== distributing to $repo ($ecosystem) ==="
-            git clone "https://x-access-token:${GH_PAT}@github.com/mediiiiium/${repo}.git" "targets/${repo}"
+            git clone "https://github.com/mediiiiium/${repo}.git" "targets/${repo}"
             bash vauban/setup.sh "targets/${repo}" "$ecosystem"
             cd "targets/${repo}"
             git add -A
             if ! git diff --staged --quiet; then
               git commit -m "chore: update vauban security setup"
-              git push "https://x-access-token:${GH_PAT}@github.com/mediiiiium/${repo}.git" HEAD
+              git push "https://github.com/mediiiiium/${repo}.git" HEAD
               echo "✓ $repo updated"
             else
               echo "- $repo no changes"
