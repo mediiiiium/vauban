@@ -100,8 +100,10 @@ jobs:
   semgrep:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # 以下は GitHub 公式(first-party)の action。mutable-action-tag は @tag 参照を警告するが、
+      # このファイルは vauban 生成物で SHA pin しても再生成で戻るため、公式 action に限り nosemgrep で抑制する。
+      - uses: actions/checkout@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+      - uses: actions/setup-python@v5  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
         with:
           python-version: '3.12'
       - run: pip install 'semgrep~=1.166'   # v1系のパッチ/ルール追従を許容しつつ再現性を確保
@@ -114,13 +116,13 @@ jobs:
       - name: Upload SARIF to GitHub Security
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v3  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
         with:
           sarif_file: semgrep.sarif
       # private repo でも確認できるよう SARIF を成果物としても残す
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
         with:
           name: semgrep-sarif
           path: semgrep.sarif
@@ -159,6 +161,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # 公開直後の（改ざんされ得る）新バージョンへの即時追従を避け、供給網リスクを緩和する。
+    cooldown:
+      default-days: 7
     groups:
       all-dependencies:
         patterns:
