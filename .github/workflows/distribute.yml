@@ -1,0 +1,70 @@
+name: Distribute vauban
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read   # push/PR 作成は GH_PAT（secrets.GH_PAT）経由で行い、GITHUB_TOKEN は使わない
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout vauban
+        uses: actions/checkout@v4
+        with:
+          path: vauban
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install tools
+        run: pip install pre-commit detect-secrets
+
+      - name: Configure git
+        run: |
+          git config --global user.name "vauban-bot"
+          git config --global user.email "vauban-bot@users.noreply.github.com"
+
+      - name: Distribute to all repos
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          VAUBAN_REPOS: ${{ vars.VAUBAN_REPOS }}
+        run: |
+          if [ -z "$VAUBAN_REPOS" ]; then
+            echo "ERROR: VAUBAN_REPOS repository variable is not set" >&2
+            echo "  Settings > Secrets and variables > Actions > Variables" >&2
+            echo '  例: [["repo-a","npm"],["repo-b","pip"]]' >&2
+            exit 1
+          fi
+
+          gh auth setup-git
+          distribute() {
+            local repo=$1
+            local ecosystem=$2
+            echo "=== distributing to $repo ($ecosystem) ==="
+            git clone "https://github.com/mediiiiium/${repo}.git" "targets/${repo}"
+            bash vauban/setup.sh "targets/${repo}" "$ecosystem"
+            cd "targets/${repo}"
+            git add -A
+            if ! git diff --staged --quiet; then
+              git commit -m "chore: update vauban security setup"
+              git push "https://github.com/mediiiiium/${repo}.git" HEAD
+              echo "✓ $repo updated"
+            else
+              echo "- $repo no changes"
+            fi
+            cd ../..
+          }
+
+          echo "$VAUBAN_REPOS" | jq -c '.[]' | while read -r pair; do
+            repo=$(echo "$pair" | jq -r '.[0]')
+            ecosystem=$(echo "$pair" | jq -r '.[1]')
+            distribute "$repo" "$ecosystem"
+          done
