@@ -5,3 +5,7 @@ venv/
 .env
 .DS_Store
 *.bak
+
+# ローカル限定メモ・設定（publicリポジトリなので個人運用の情報を出さない）
+CLAUDE.local.md
+.claude/settings.local.json
