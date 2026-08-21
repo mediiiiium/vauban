@@ -10,7 +10,7 @@ set -e
 
 # vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
 # どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
-VAUBAN_VERSION="1.5.0"
+VAUBAN_VERSION="1.6.0"
 
 TARGET="$1"
 ECOSYSTEM="${2:-none}"

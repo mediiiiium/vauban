@@ -2,11 +2,13 @@
 # vauban managed — setup.sh が各リポジトリに配布します。再実行で上書きされます。
 import sys
 import os
+import json
 import subprocess
+from datetime import datetime, timezone
 
 # vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
 # setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
 # lock ファイル・自動生成物・ビルド成果物は差分から除外する。
 # これらが混ざると 100k 文字制限で実コードが切り捨てられ、レビューから漏れる。
@@ -27,6 +29,54 @@ EXCLUDES = [
     ":(exclude)*.min.css",
     ":(exclude)*.map",
 ]
+
+# このフックは配布先の全リポジトリで git push のたびに Gemini 無料枠(RPD)を1件消費する。
+# 記録が無いと「誰も使っていないのに枠が切れる」状態になり、枠切れ時に有料 API へ
+# フォールバックする別系統（now-on-tap）の課金原因を追えない。
+# ログを各リポジトリ内に置くと git 管理対象へ紛れ込むため、リポジトリ外の1ファイルに
+# 集約する。dev-dashboard の gemini.usage_logs がこれを読む。
+# 形式は now-on-tap の .gemini_usage.jsonl と同一（ts / source / model / tokens）。
+USAGE_LOG = os.environ.get(
+    "GEMINI_REVIEW_USAGE_LOG",
+    os.path.expanduser("~/.cache/vauban/gemini_usage.jsonl"),
+)
+
+
+def _repo_name() -> str:
+    """ログの source 名に使うリポジトリのディレクトリ名。"""
+    try:
+        top = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if top:
+            return os.path.basename(top)
+    except (subprocess.CalledProcessError, OSError):
+        pass
+    return os.path.basename(os.getcwd()) or "unknown"
+
+
+def record_usage(model: str, tokens: int) -> None:
+    """1リクエスト＝1行を追記する。
+
+    目的は「無料枠を削った事実」を残すことなので、API がエラー／タイムアウトで
+    返った場合もリクエスト自体は届いている前提で tokens=0 の行を書く
+    （RPD の1件として数えたい）。API を叩く前にスキップした場合は呼ばない。
+    ログの失敗で push を壊さないよう、例外は握りつぶす。
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        entry = {
+            "ts": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
+            "source": f"gemini-review/{_repo_name()}",
+            "model": model,
+            "tokens": int(tokens or 0),
+        }
+        os.makedirs(os.path.dirname(USAGE_LOG), exist_ok=True)
+        with open(USAGE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        # ログ記録の失敗でレビュー本体・push を止めない。
+        pass
 
 
 def get_diff() -> str:
@@ -108,8 +158,16 @@ def review(diff: str) -> str:
             http_options=types.HttpOptions(timeout=timeout_ms),
         )
         response = client.models.generate_content(model=model, contents=prompt)
+        # usage_metadata はモデル/SDK 版によって欠けることがある。取れなくても
+        # リクエスト1件は消費しているので、tokens=0 で行だけは必ず残す。
+        try:
+            tokens = int(getattr(response.usage_metadata, "total_token_count", 0) or 0)
+        except Exception:
+            tokens = 0
+        record_usage(model, tokens)
         return response.text or ""
     except Exception as e:
+        record_usage(model, 0)
         print(f"[Gemini] スキップします（API エラー / タイムアウト）: {e}", file=sys.stderr)
         return ""
 
