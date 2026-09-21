@@ -9,3 +9,4 @@ venv/
 # ローカル限定メモ・設定（publicリポジトリなので個人運用の情報を出さない）
 CLAUDE.local.md
 .claude/settings.local.json
+pj-vauban-review-bundle.md
