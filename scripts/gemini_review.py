@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 # vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
 # setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 # lock ファイル・自動生成物・ビルド成果物は差分から除外する。
 # これらが混ざると 100k 文字制限で実コードが切り捨てられ、レビューから漏れる。

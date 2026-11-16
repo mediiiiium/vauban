@@ -326,6 +326,11 @@ vauban 自体が public リポジトリであることに起因する固有の�
 
 バージョンは `setup.sh --version` / `python3 scripts/gemini_review.py --version` で確認できる。
 
+### v1.7.0（2026-11-17）— フックを動かす Python を 3.10 以上に固定
+- `setup.sh` が素の `python3` を使っていたため、macOS で CommandLineTools の Python 3.9（サポート終了）に pre-commit が入り、フックの `INSTALL_PYTHON` も 3.9 に焼き込まれていた。その結果 Gemini レビューの隔離環境が 3.9 で作られ、google-auth が `FutureWarning: ... Python version 3.9 past its end of life` を出していた。
+- 3.10 以上の Python を探して（3.13 → 3.12 → 3.14 → 3.11 → 3.10 → `python3` の順）pip 導入・baseline 生成・`pre-commit install` のすべてに使うよう変更。見つからなければ案内を出して終了する。
+- 既存の導入先は、手元で `setup.sh` を再実行するとフックが新しい Python に向き直り、隔離環境も初回の push で作り直される（CI の配布ではローカルの `.git/hooks` は更新されない）。
+
 ### v1.5.0（2026-07-02）— 公開リポジトリ化に伴うセキュリティ棚卸し
 - 🟡 **対象リポジトリ名をソースから除去**: `scripts/rescue.py` / `.github/workflows/distribute.yml` にハードコードされていた個人運用の private リポジトリ名一覧を削除し、GitHub Actions のリポジトリ変数 `VAUBAN_REPOS`（JSON配列）から読む方式に変更。public リポジトリから非公開プロジェクトの存在・名称が読める状態を解消。
 - `distribute.yml` / `rescue.yml` に `permissions: contents: read` を明記（両者とも push/PR は自前の `GH_PAT` で行い `GITHUB_TOKEN` は未使用のため最小化）。

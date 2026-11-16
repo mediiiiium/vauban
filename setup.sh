@@ -10,7 +10,7 @@ set -e
 
 # vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
 # どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
-VAUBAN_VERSION="1.6.0"
+VAUBAN_VERSION="1.7.0"
 
 TARGET="$1"
 ECOSYSTEM="${2:-none}"
@@ -178,14 +178,39 @@ cd "$TARGET"
 # pre-commit 本体と detect-secrets（baseline 生成に使う）を入れる。
 # Gemini レビューの google-genai は .pre-commit-config.yaml 側の
 # additional_dependencies で pre-commit が隔離環境に入れるため、ここでは入れない。
-# PEP 668（externally-managed-environment）対策で段階的にフォールバックする。
-install_deps() {
-  python3 -m pip install pre-commit detect-secrets --quiet --user 2>/dev/null && return 0
-  python3 -m pip install pre-commit detect-secrets --quiet --user --break-system-packages 2>/dev/null && return 0
-  python3 -m pip install pre-commit detect-secrets --quiet --break-system-packages 2>/dev/null && return 0
+#
+# pre-commit は「自分を動かしている Python」で language: python の隔離環境を作り、
+# `pre-commit install` はその Python のパスをフックに焼き込む。macOS では素の
+# `python3` が CommandLineTools の 3.9（サポート終了）を指すことがあり、そのまま使うと
+# Gemini レビューが 3.9 で動いて google-genai がサポート終了の警告を出す。
+# そこで 3.10 以上の Python を選んで以降すべてに使う。新しすぎる版は依存
+# （pydantic-core 等）の wheel がまだ無いことがあるので、実績のある版から優先して探す。
+pick_python() {
+  local c
+  for c in python3.13 python3.12 python3.14 python3.11 python3.10 python3; do
+    if command -v "$c" >/dev/null 2>&1 \
+      && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      command -v "$c"
+      return 0
+    fi
+  done
   return 1
 }
-if python3 -c "import pre_commit, detect_secrets" 2>/dev/null; then
+if ! PY="$(pick_python)"; then
+  echo "✗ Python 3.10 以上が見つかりません（Gemini レビューの隔離環境に必要）。"
+  echo "  例: brew install python@3.12 を入れてから setup.sh を再実行してください。"
+  exit 1
+fi
+echo "✓ 使用する Python: $PY ($("$PY" -c 'import platform; print(platform.python_version())'))"
+
+# PEP 668（externally-managed-environment）対策で段階的にフォールバックする。
+install_deps() {
+  "$PY" -m pip install pre-commit detect-secrets --quiet --user 2>/dev/null && return 0
+  "$PY" -m pip install pre-commit detect-secrets --quiet --user --break-system-packages 2>/dev/null && return 0
+  "$PY" -m pip install pre-commit detect-secrets --quiet --break-system-packages 2>/dev/null && return 0
+  return 1
+}
+if "$PY" -c "import pre_commit, detect_secrets" 2>/dev/null; then
   echo "✓ pre-commit / detect-secrets 既に導入済み（インストールskip）"
 elif ! install_deps; then
   echo "✗ pre-commit / detect-secrets のインストールに失敗しました。"
@@ -198,7 +223,7 @@ else
 fi
 
 if [ ! -f ".secrets.baseline" ]; then
-  python3 -m detect_secrets scan \
+  "$PY" -m detect_secrets scan \
     --exclude-files 'node_modules/.*' \
     --exclude-files '\.venv/.*' \
     --exclude-files 'vendor/.*' \
@@ -210,15 +235,15 @@ if [ ! -f ".secrets.baseline" ]; then
   echo ""
   echo "  ⚠️ baseline には『生成時点で見つかった秘密』が既知として登録され、"
   echo "     以後スキャンから除外される。既存の本物の鍵が紛れていないか必ず棚卸しを:"
-  echo "       python3 -m detect_secrets audit .secrets.baseline"
+  echo "       $PY -m detect_secrets audit .secrets.baseline"
   echo "     本物が見つかったら baseline で蓋をせず、鍵をローテーションすること。"
   echo ""
 else
   echo "✓ .secrets.baseline（既存を維持）"
 fi
 
-python3 -m pre_commit install
-python3 -m pre_commit install --hook-type pre-push
+"$PY" -m pre_commit install
+"$PY" -m pre_commit install --hook-type pre-push
 echo "✓ pre-commit フック（commit + push）インストール済み"
 
 echo ""
