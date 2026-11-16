@@ -16,7 +16,7 @@ Claude Pro の範囲内で複数の AI とセキュリティツールを組み�
 | :--- | :--- | :--- | :--- |
 | 実装支援 | Claude Code | ローカル開発中 | Claude Pro |
 | pre-commit | detect-secrets | コミット前（ローカル） | 無料 |
-| pre-push | Gemini 2.0 Flash | プッシュ前（ローカル） | 無料 |
+| pre-push | Gemini 3.1 Flash Lite | プッシュ前（ローカル） | 無料 |
 | CI | Semgrep / Dependabot | GitHub Actions | 無料 |
 | PR レビュー | Qodo Merge | プルリクエスト時 | 無料（個人プラン・制限あり） |
 
@@ -80,7 +80,7 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 
 ### Layer 2 — pre-push: Gemini によるコードベース整合性チェック
 
-**ツール:** Gemini Flash（既定 `gemini-2.5-flash`・Google AI Studio 無料枠）
+**ツール:** Gemini Flash Lite（既定 `gemini-3.1-flash-lite`・Google AI Studio 無料枠）
 
 差分を Gemini に渡し、コードベース全体との設計上の矛盾・セキュリティ上の懸念を確認する。Semgrep が既知パターンを検出するのに対して、Gemini は文脈・設計レベルの問題を補う。
 
@@ -89,7 +89,7 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 **振る舞い:**
 
 1. `get_diff()` で push 対象の差分を取得する。`@{push}` → `@{upstream}` → `origin/HEAD` の順に merge-base 起点で diff を取り、複数コミットをまとめて push しても全体をレビューできるようにする（いずれも失敗したら最後の手段として `HEAD~1..HEAD`）。
-2. `GEMINI_API_KEY`（必須）、`GEMINI_MODEL`（任意・既定 `gemini-2.5-flash`）、`GEMINI_TIMEOUT_MS`（任意・既定 10000）を env から読む。
+2. `GEMINI_API_KEY`（必須）、`GEMINI_MODEL`（任意・既定 `gemini-3.1-flash-lite`）、`GEMINI_TIMEOUT_MS`（任意・既定 10000）を env から読む。
 3. 新 SDK（`from google import genai` → `genai.Client(...)`）で差分をレビューさせ、結果を標準出力に表示する。
 4. **常に exit 0**（情報表示のみ・push はブロックしない）。
 
@@ -100,7 +100,7 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 - **pre-push なので必ずタイムアウトを設ける**（`GEMINI_TIMEOUT_MS`・既定 10 秒）。API が応答しないときに `git push` がハングするのを防ぐ。超過時はスキップして push を通す。開発テンポを優先し短め（5 秒では正常応答を切る懸念があり 10 秒に設定）。
 - **lock ファイル・自動生成物・ビルド成果物は差分から除外**してからレビューする（`package-lock.json` / `*.lock` / `*.min.js` / `*.map` 等）。これらが混ざると 100k 制限で実コードが切り捨てられ、ノイズと AI 送信面積も増える。除外後に実コード差分が無ければ API を叩かずスキップする。
 - **指摘があるときだけ枠付きで強調表示**し、無いときは stderr に 1 行（`問題なし`）。push のログに埋もれて見落とす／オオカミ少年化するのを防ぐ。
-- **無料枠で使えるモデルは変わる。** 既定は `gemini-2.5-flash`（2026-06-16 時点で無料枠で稼働を実測確認）。旧 `gemini-2.0-flash` は無料枠が `limit: 0`（=実質不可）に外れたため使わない。他に `gemini-flash-latest` / `gemini-2.5-flash-lite` / `gemini-3.5-flash` 系も無料で通った。無料枠は変動するので、動かなくなったら `GEMINI_MODEL` で差し替える（`python3 -c "from google import genai,os; [print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"` で一覧確認）。
+- **無料枠で使えるモデルは変わる。** 既定は `gemini-3.1-flash-lite`（2026-07-02 に `gemini-2.5-flash` から変更。`2.5-flash` / `3.5-flash` の無料枠は 1 日 20 回・1 分 5 回しかなく、`3.1-flash-lite` は 1 日 500 回・1 分 15 回）。2026-11-17 時点では `gemini-3.5-flash-lite` も同じ 15 RPM / 250K TPM / 500 RPD だが、短い質問での応答が 2〜5 秒と `3.1-flash-lite`（1〜2 秒）より遅かったため、10 秒で打ち切る pre-push では `3.1-flash-lite` を既定のままにしている。旧 `gemini-2.0-flash` は無料枠が `limit: 0`（=実質不可）に外れたため使わない。無料枠は変動するので、動かなくなったら `GEMINI_MODEL` で差し替える（`python3 -c "import os; from google import genai; [print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"` で一覧確認）。
 - 差分が 100,000 文字を超える場合は先頭のみレビューし、その旨を stderr に表示する（残りは未確認）。
 - 結果は表示のみで push はブロックしない。ブロックしたい場合はスクリプト末尾を `exit 1` に変更する。
 - pre-commit フックには `verbose: true` が必須。これが無いと exit 0 のフック出力はフレームワークに握り潰され、レビュー結果が画面に出ない。
@@ -265,7 +265,7 @@ Zion check（人間の最終確認・最後の砦）→ マージ
 | ツール | 無料範囲 |
 | :--- | :--- |
 | Claude Code | Claude Pro に含まれる |
-| Gemini（既定 2.5 Flash） | AI Studio の無料枠（レートリミット・モデル別quotaあり。`GEMINI_MODEL` で差替可） |
+| Gemini（既定 3.1 Flash Lite） | AI Studio の無料枠（レートリミット・モデル別quotaあり。`GEMINI_MODEL` で差替可） |
 | detect-secrets | 完全無料（OSS） |
 | Semgrep Community | 完全無料（プライベートリポジトリ含む）。ただし SARIF の Security タブ掲載は public / GHAS のみ |
 | Dependabot | GitHub 標準機能（無料） |
