@@ -16,9 +16,19 @@ Claude Pro の範囲内で複数の AI とセキュリティツールを組み�
 | :--- | :--- | :--- | :--- |
 | 実装支援 | Claude Code | ローカル開発中 | Claude Pro |
 | pre-commit | detect-secrets | コミット前（ローカル） | 無料 |
-| pre-push | Gemini 3.1 Flash Lite | プッシュ前（ローカル） | 無料 |
+| pre-push | Gemini 3.1 Flash Lite | プッシュ前（ローカル・**リポごとのオプトイン**） | 無料 |
 | CI | Semgrep / Dependabot | GitHub Actions | 無料 |
 | PR レビュー | Qodo Merge | プルリクエスト時 | 無料（個人プラン・制限あり） |
+
+**リポにコミットする層と、手元だけの層を分ける（v1.8.0〜）。**
+
+| 区分 | 層 | 置き場所 | 理由 |
+| :--- | :--- | :--- | :--- |
+| リポにコミット | detect-secrets / Semgrep / Dependabot | 各リポの設定ファイル | 誰がそのリポを使っても役に立つ。外部からの PR も検査できる |
+| 手元だけ | Gemini レビュー | `.git/hooks/pre-push`（コミットされない）＋ vauban 本体のスクリプト | 自分の API キーと判断で動くもの。public リポをフォークした人の差分が、本人の知らないうちに Google へ送られるのを防ぐ |
+| vauban の管理外 | Qodo Merge | GitHub App の設定 | 対象リポの選択は GitHub 側で行う。setup.sh は案内を出すだけ |
+
+どの層を入れるかはリポごとに選べる（後述の「セットアップ手順」）。
 
 ---
 
@@ -33,7 +43,8 @@ Claude Pro の範囲内で複数の AI とセキュリティツールを組み�
 **`.pre-commit-config.yaml`（各リポジトリに設置）:**
 
 ```yaml
-# vauban managed — setup.sh が生成。再実行で上書きされる（後述のマーカー方式）。
+# vauban managed (v1.8.0) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
+# https://github.com/<owner>/vauban
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -41,23 +52,11 @@ repos:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
         exclude: '(^|/)(node_modules|\.venv|venv|vendor|dist|build|__pycache__)/'
-
-  - repo: local
-    hooks:
-      - id: gemini-review
-        name: Gemini Code Review
-        entry: python scripts/gemini_review.py
-        language: python                       # pre-commit が隔離 venv を作る
-        additional_dependencies: [google-genai]  # その venv に依存を入れる
-        stages: [pre-push]
-        pass_filenames: false
-        always_run: true
-        verbose: true   # exit 0 でも結果を表示させる（無いと出力が握り潰される）
 ```
 
-`language: python` + `additional_dependencies` にすることで、google-genai は **pre-commit が管理する隔離環境**に入る。グローバル python に依存しないため「別の python3 で動いて import 失敗→無言スキップ」を防げる（`language: system` の弱点）。初回 push 時に venv 構築でやや時間がかかる。
+このファイルは detect-secrets だけを持つ。v1.7.0 までは Gemini レビューもここ（`repo: local` の pre-push フック）に入れていたが、コミットされるファイルに入れると、リポを clone・フォークした人が `pre-commit install` した時点で、その人の `GEMINI_API_KEY` で差分が送られてしまう。v1.8.0 で Layer 2 は手元だけのフックに移した。
 
-detect-secrets（pre-commit）と Gemini レビュー（pre-push）を両方ここで管理する。`.git/hooks/` を直接編集しないため、ファイルとしてコミット可能。
+このファイルの `vauban managed` マーカーは「このリポに vauban が入っている」目印も兼ねる（`sync.sh` が導入先を探すのに使う）。
 
 `.secrets.baseline` はリポジトリにコミットする。既知の偽陽性はここに登録して除外する。
 
@@ -84,7 +83,15 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 
 差分を Gemini に渡し、コードベース全体との設計上の矛盾・セキュリティ上の懸念を確認する。Semgrep が既知パターンを検出するのに対して、Gemini は文脈・設計レベルの問題を補う。
 
-実体は [`scripts/gemini_review.py`](scripts/gemini_review.py)（setup.sh が各リポジトリにコピー設置する）。ドリフト防止のためここにはコード全文を載せず、振る舞いだけ記す。
+実体は [`scripts/gemini_review.py`](scripts/gemini_review.py)。ドリフト防止のためここにはコード全文を載せず、振る舞いだけ記す。
+
+**置き方（v1.8.0〜）:**
+
+- スクリプトは各リポに**コピーしない**。setup.sh が各リポの `.git/hooks/pre-push` に短いフックを書き、そこから vauban 本体のスクリプトを直接呼ぶ。vauban を `git pull` すれば全リポに即反映される。
+- 依存（`google-genai`）は PC に 1 つの専用 venv（既定 `~/.cache/vauban/venv`。`VAUBAN_VENV` で変更可）に入れ、全リポで共有する。
+- **既定は無効（オプトイン）。** リポごとに `git config vauban.gemini true` で有効化する（`setup.sh <repo> --gemini` が設定する）。この設定は `.git/config` に入り、コミットされない。設定を忘れたリポや、設定していない 2 台目の PC では送信されない。送ってはいけないリポで「止め忘れる」より「入れ忘れる」ほうが安全なので、この向きにしている。
+- フックは vauban 本体や venv が見つからなければ 1 行出して push を通す。レビューが失敗しても push は止めない。
+- 既存の pre-push フック（vauban 管理外）がある場合は上書きせず、警告して Gemini フックを入れない。
 
 **振る舞い:**
 
@@ -95,15 +102,14 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 
 **制約・前提:**
 
-- 使用パッケージは **`google-genai`（新 SDK）**。旧 `google-generativeai` ではない（import 形が異なる）。これは `.pre-commit-config.yaml` の `additional_dependencies` で **pre-commit が隔離環境に導入**するため、グローバル python への手動インストールは不要。
-- `GEMINI_API_KEY` 未設定・SDK 未インストール・API エラー（レート超過等）・**タイムアウト超過**は、いずれもメッセージを出して**スキップ通過**する。CI では Gemini 無しで動く。
+- 使用パッケージは **`google-genai`（新 SDK）**。旧 `google-generativeai` ではない（import 形が異なる）。setup.sh が専用 venv に入れるため、グローバル python への手動インストールは不要。
+- `GEMINI_API_KEY` 未設定・SDK 未インストール・API エラー（レート超過等）・**タイムアウト超過**は、いずれもメッセージを出して**スキップ通過**する。CI では動かない（手元だけの層）。
 - **pre-push なので必ずタイムアウトを設ける**（`GEMINI_TIMEOUT_MS`・既定 10 秒）。API が応答しないときに `git push` がハングするのを防ぐ。超過時はスキップして push を通す。開発テンポを優先し短め（5 秒では正常応答を切る懸念があり 10 秒に設定）。
 - **lock ファイル・自動生成物・ビルド成果物は差分から除外**してからレビューする（`package-lock.json` / `*.lock` / `*.min.js` / `*.map` 等）。これらが混ざると 100k 制限で実コードが切り捨てられ、ノイズと AI 送信面積も増える。除外後に実コード差分が無ければ API を叩かずスキップする。
 - **指摘があるときだけ枠付きで強調表示**し、無いときは stderr に 1 行（`問題なし`）。push のログに埋もれて見落とす／オオカミ少年化するのを防ぐ。
 - **無料枠で使えるモデルは変わる。** 既定は `gemini-3.1-flash-lite`（2026-07-02 に `gemini-2.5-flash` から変更。`2.5-flash` / `3.5-flash` の無料枠は 1 日 20 回・1 分 5 回しかなく、`3.1-flash-lite` は 1 日 500 回・1 分 15 回）。2026-11-17 時点では `gemini-3.5-flash-lite` も同じ 15 RPM / 250K TPM / 500 RPD だが、短い質問での応答が 2〜5 秒と `3.1-flash-lite`（1〜2 秒）より遅かったため、10 秒で打ち切る pre-push では `3.1-flash-lite` を既定のままにしている。旧 `gemini-2.0-flash` は無料枠が `limit: 0`（=実質不可）に外れたため使わない。無料枠は変動するので、動かなくなったら `GEMINI_MODEL` で差し替える（`python3 -c "import os; from google import genai; [print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"` で一覧確認）。
 - 差分が 100,000 文字を超える場合は先頭のみレビューし、その旨を stderr に表示する（残りは未確認）。
 - 結果は表示のみで push はブロックしない。ブロックしたい場合はスクリプト末尾を `exit 1` に変更する。
-- pre-commit フックには `verbose: true` が必須。これが無いと exit 0 のフック出力はフレームワークに握り潰され、レビュー結果が画面に出ない。
 
 ---
 
@@ -111,7 +117,9 @@ setup.sh は baseline 新規生成時にこの棚卸しを促すメッセージ�
 
 #### Semgrep（SAST）
 
-**`.github/workflows/semgrep.yml`:**
+**再利用ワークフロー方式（v1.8.0〜）:** スキャンの中身は vauban 側の [`.github/workflows/semgrep.yml`](.github/workflows/semgrep.yml)（`on: workflow_call`）に 1 つだけ置き、各リポには呼び出すだけの短いファイルを置く。
+
+**各リポの `.github/workflows/semgrep.yml`（setup.sh が生成）:**
 
 ```yaml
 name: Semgrep
@@ -124,7 +132,24 @@ permissions:
   security-events: write   # SARIF を Security タブへ上げるのに必要
 jobs:
   semgrep:
+    uses: <owner>/vauban/.github/workflows/semgrep.yml@v1
+```
+
+- vauban 側を直してタグ `v1` を動かせば、全リポのスキャンが一斉に更新される。配布し直す必要も、全リポに書き込めるトークンも要らない。
+- public リポの再利用ワークフローは private リポからも呼べる。
+- 代わりに、vauban が全リポの CI の依存先になる。**タグを壊すと全リポの CI が同時に落ちる**ので、変更は main で確認してからタグを動かす。
+- 呼び出し側で `permissions` を明示し、`secrets: inherit` は付けない（vauban 側にリポの secrets を渡さない）。
+- タグ参照は Semgrep の mutable-action-tag ルールに引っかかるため `nosemgrep` を付けている。SHA pin すると vauban 側の更新が届かなくなるので、意図してタグで呼ぶ。
+
+**vauban 側の再利用ワークフローの中身:**
+
+```yaml
+jobs:
+  semgrep:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -194,52 +219,89 @@ GitHub Marketplace から Qodo Merge を GitHub App として連携すると、P
 
 ## セットアップ手順
 
-vauban の `setup.sh` を対象リポジトリに対して実行するだけで全ファイルが展開される。
+vauban の `setup.sh` を対象リポジトリに対して実行する。
 
 ```bash
-# Usage: bash setup.sh <target-repo-path> [npm|pip|none]
+# Usage: bash setup.sh <target-repo-path> [ecosystem] [--gemini|--no-gemini] [--semgrep|--no-semgrep] [--remove]
 
-bash ~/vauban/setup.sh ~/my-web-app  npm
-bash ~/vauban/setup.sh ~/my-api      pip
-bash ~/vauban/setup.sh ~/my-cli-tool none
+bash ~/vauban/setup.sh ~/my-web-app  npm               # detect-secrets + Semgrep + Dependabot(npm)
+bash ~/vauban/setup.sh ~/my-api      pip --gemini      # 上に加えて、この PC で Gemini レビューを有効化
+bash ~/vauban/setup.sh ~/my-docs     none --no-semgrep # detect-secrets だけ
+bash ~/vauban/setup.sh ~/my-web-app                    # 再実行（今の層のまま最新に更新）
+bash ~/vauban/setup.sh ~/my-web-app  --remove          # vauban を外す
 ```
 
-対象リポジトリの一覧は個人運用の内部情報のため本リポジトリのソースには含めない。`scripts/rescue.py` と `.github/workflows/distribute.yml` は、GitHub Actions のリポジトリ変数 `VAUBAN_REPOS`（JSON配列 `[["repo","ecosystem"], ...]`）から対象を読む。設定は各自の環境で:
+**層の選び方の目安:**
+
+| リポの種類 | 層 |
+| :--- | :--- |
+| public（他人がフォーク・DL する） | detect-secrets + Semgrep + Dependabot。Gemini は手元で有効にしてよい（コードは公開済み） |
+| private でコードあり | detect-secrets + Semgrep + Dependabot。Gemini は送ってよいリポだけ `--gemini` |
+| ドキュメント中心 | detect-secrets だけ（`none --no-semgrep`） |
+
+**層の状態はファイルの有無で表す。** 設定ファイルは置かない。
+
+| ファイル（`vauban managed` マーカー付き） | 意味 |
+| :--- | :--- |
+| `.pre-commit-config.yaml` | vauban 導入済み（detect-secrets。常に入る） |
+| `.github/workflows/semgrep.yml` | Semgrep あり |
+| `.github/dependabot.yml` | Dependabot あり（ecosystem もここから読む） |
+| `git config vauban.gemini`（コミットされない） | この PC でこのリポの Gemini レビューが有効 |
+
+再実行時に引数を省くと、今あるファイルから層を読み取って引き継ぐ。層を外すと、vauban が生成したファイルを削除する。
+
+### 導入先の管理と一括更新（`sync.sh`）
+
+導入先リポの一覧は持たない。手元の clone のうち `.pre-commit-config.yaml` に `vauban managed` マーカーがあるものを、その都度探す。
 
 ```bash
-gh variable set VAUBAN_REPOS --repo <owner>/vauban --body '[["repo-a","npm"],["repo-b","pip"]]'
+bash ~/vauban/sync.sh              # $HOME の下 3 階層を探し、setup.sh を再実行して差分を表示
+bash ~/vauban/sync.sh --commit     # vauban のファイルだけをコミット（既定ブランチにいるときのみ）
+bash ~/vauban/sync.sh --push       # コミットして push
+bash ~/vauban/sync.sh ~/work       # 探す場所を指定
 ```
+
+- リポを増やす: そのリポで `setup.sh` を 1 回実行してコミットする。減らす: `setup.sh --remove`。リネームしても目印はリポの中にあるので壊れない。
+- 手元で動かし、自分の git / gh の認証で push する。GitHub に全リポへ書き込めるトークンを置かない。
+- ローカルの `.git/hooks` も同時に更新される（CI からの配布ではできなかった）。
+- vauban のファイル以外の変更はコミットしない。既定ブランチ以外にいるリポはコミットせずスキップする。
+- 手元に clone の無い導入先は対象にならない。新しい PC では、使うリポを clone して `setup.sh` を 1 回実行する（ローカルフックの導入に必要）。
 
 ### setup.sh 実行後の手動作業
 
 ```bash
-# 1. Gemini API キーを環境変数に設定（~/.zshrc 等に追記推奨）
-export GEMINI_API_KEY="your_api_key"
-
-# 2. GitHub Marketplace から Qodo Merge を各リポジトリに連携
-
-# 3. 作成されたファイルをコミット
+# 1. 作成されたファイルをコミット
 git add .pre-commit-config.yaml .secrets.baseline \
-        scripts/gemini_review.py \
-        .github/workflows/semgrep.yml .semgrepignore
-# Dependabot を設定した場合は追加
-git add .github/dependabot.yml
+        .github/workflows/semgrep.yml .semgrepignore .github/dependabot.yml
 git commit -m "add vauban security setup"
 git push
+
+# 2. Gemini レビューを有効にしたなら、API キーを環境変数に設定（~/.zshrc 等）
+export GEMINI_API_KEY="your_api_key"
+
+# 3. 必要なら GitHub Marketplace から Qodo Merge を連携（vauban の管理外）
 ```
 
 ### 更新とバージョン（ドリフト対策）
 
-`setup.sh` は配布ファイルを各リポジトリに**コピー**するため、本体を直しても既存 repo には自動反映されない。どの repo がどの版かを確認できるようバージョンを埋め込んでいる。
+更新の届き方は層によって違う。
+
+| 層 | 本体を直したときの届き方 |
+| :--- | :--- |
+| Semgrep | vauban のタグ `v1` を動かせば全リポに即反映（各リポのファイルは呼び出しだけ） |
+| Gemini レビュー | vauban を `git pull` すれば全リポに即反映（各リポにコピーしていない） |
+| detect-secrets・Dependabot・呼び出し用ファイル | 各リポへの**コピー**なので、`sync.sh` で setup.sh を再実行して揃える |
+
+どの repo がどの版かは、生成ファイルのマーカー行に埋め込んだバージョンで分かる。
 
 ```bash
-bash ~/vauban/setup.sh --version            # 本体の版
-python3 scripts/gemini_review.py --version      # 各 repo に入っている版
+bash ~/vauban/setup.sh --version                 # 本体の版
+head -1 .pre-commit-config.yaml                  # 各 repo に入っている版（vauban managed (v1.8.0) …）
 ```
 
-**更新方法は setup.sh の再実行のみ**（既存の `.secrets.baseline` / `.semgrepignore` は維持され、上書きされない）。版がズレている repo を見つけたら流し直す。7 repo 程度の個人運用ではこの「再実行で更新」で十分なため、サブモジュール等の重い共有はしていない。
+既存の `.secrets.baseline` / `.semgrepignore` は再実行で上書きされない。
 
-**既存ファイルの保護（マーカー方式）:** setup.sh が生成するファイル（`.pre-commit-config.yaml` / `semgrep.yml` / `dependabot.yml` / `gemini_review.py`）の先頭には `# vauban managed` マーカーを埋め込む。再実行時、対象ファイルが既に存在し**マーカーを含まない場合**（＝ユーザーが自前で用意した設定）は、黙って消さず **`*.bak` に退避してから**上書きする。マーカーを含む（＝前回 vauban が生成した）場合はそのまま上書き＝更新。これにより「更新の上書き」と「既存資産の破壊防止」を両立する。導入先で独自の pre-commit フックや Actions を使っていた場合は `*.bak` から手動でマージする。
+**既存ファイルの保護（マーカー方式）:** setup.sh が生成するファイル（`.pre-commit-config.yaml` / `semgrep.yml` / `dependabot.yml` / ローカルの `pre-push` フック）の先頭には `# vauban managed` マーカーを埋め込む。再実行時、対象ファイルが既に存在し**マーカーを含まない場合**（＝ユーザーが自前で用意した設定）は、黙って消さず **`*.bak` に退避してから**上書きする。マーカーを含む（＝前回 vauban が生成した）場合はそのまま上書き＝更新。これにより「更新の上書き」と「既存資産の破壊防止」を両立する。導入先で独自の pre-commit フックや Actions を使っていた場合は `*.bak` から手動でマージする。
 
 ```
 ローカル実装（Claude Code）
@@ -248,7 +310,7 @@ git commit
     → detect-secrets がシークレット検出（問題があればコミット失敗）
     ↓
 git push
-    → Gemini pre-push フックが差分レビュー（結果を表示して通過）
+    → Gemini pre-push フックが差分レビュー（有効にしたリポのみ。結果を表示して通過）
     → GitHub Actions で Semgrep が自動実行
     → Dependabot が依存関係を週次でスキャン
     ↓
@@ -288,8 +350,8 @@ Zion check（人間の最終確認・最後の砦）→ マージ
 
 **判断材料:**
 
-- ⚠️ **Gemini 無料枠の学習利用リスクは重い。** 商用化・特許を狙うコアロジック、契約上社外秘のコード、あるいは誤ってステージした認証情報などが含まれると、規約上 Google 側に学習・閲覧されうる。**秘匿すべきリポジトリでは `GEMINI_API_KEY` を設定せず Gemini 層を無効化する**こと（未設定なら自動スキップ）。どうしても AI レビューが要るなら、学習に使われない有料経路（Vertex AI 等）への切り替えを検討する。
-- 同様に Qodo Merge も第三者にコードが渡る。機微な repo では App を入れない。
+- ⚠️ **Gemini 無料枠の学習利用リスクは重い。** 商用化・特許を狙うコアロジック、契約上社外秘のコード、あるいは誤ってステージした認証情報などが含まれると、規約上 Google 側に学習・閲覧されうる。v1.8.0 から Gemini 層は**既定で無効**で、送ってよいリポだけ `setup.sh <repo> --gemini`（＝ `git config vauban.gemini true`）で有効にする。`GEMINI_API_KEY` をシェル全体に設定していても、有効化していないリポでは送られない。どうしても AI レビューが要るなら、学習に使われない有料経路（Vertex AI 等）への切り替えを検討する。
+- 同様に Qodo Merge も第三者にコードが渡る。機微な repo では App を入れない。public リポでは、外部の人が出した PR の内容も Qodo に渡る。
 - ローカル完結なのは detect-secrets のみ。「最低限ここだけは効かせる」というミニマム構成も可能。
 
 ---
@@ -314,9 +376,9 @@ Zion check（人間の最終確認・最後の砦）→ マージ
 vauban 自体が public リポジトリであることに起因する固有の注意点。ファイルを追加・変更するときは以下を確認する。
 
 - 🟢 **公開してよいもの**: 設計思想・アーキテクチャ・各層の設定テンプレート（yaml等）そのもの、コスト表、外部送信データフロー表、変更履歴、外部レビュー履歴、スクリプトの汎用ロジック。this repo の存在意義そのものなので基本は公開前提。
-- 🔴 **公開してはいけないもの**: `GEMINI_API_KEY` / `GH_PAT` 等のシークレットの**実値**（プレースホルダのみ可）。コミット前に `detect-secrets` のローカルスキャンに加え、`git log -p` で過去履歴も汚染していないか確認する。
-- 🟡 **判断が必要なもの＝実際の private リポジトリ名・個人プロジェクトの実名**: `scripts/rescue.py` や `.github/workflows/*.yml` に対象リポジトリ名を**直接ハードコードしない**。GitHub Actions のリポジトリ変数 `VAUBAN_REPOS`（Settings > Secrets and variables > Actions > Variables）経由で渡す。README/DESIGN.md の使用例も実名ではなく汎用名（`my-web-app` 等）を使う。
-- ワークフロー（`.github/workflows/*.yml`）を新規追加・変更する際は `permissions:` を必要最小限に明記する。`GH_PAT` 等の自前トークンを使う場合、`GITHUB_TOKEN` 側の権限は基本 `contents: read` で足りる。
+- 🔴 **公開してはいけないもの**: `GEMINI_API_KEY` 等のシークレットの**実値**（プレースホルダのみ可）。コミット前に `detect-secrets` のローカルスキャンに加え、`git log -p` で過去履歴も汚染していないか確認する。
+- 🟡 **判断が必要なもの＝実際の private リポジトリ名・個人プロジェクトの実名**: ソースにも**Actions の実行ログにも**出さない。public リポの Actions ログはログインした誰でも読め、Actions の「変数」はログで伏せ字にならない（v1.7.0 まで配布先一覧を変数で渡しており、ログに private リポ名が出ていた）。リポ名を扱う処理は vauban の Actions で走らせず、手元の `sync.sh` で行う。README/DESIGN.md の使用例も実名ではなく汎用名（`my-web-app` 等）を使う。
+- ワークフロー（`.github/workflows/*.yml`）を新規追加・変更する際は `permissions:` を必要最小限に明記する。他リポに書き込めるトークンを vauban の secrets に置かない。
 - `.claude/settings.local.json` のようなローカル専用設定ファイルは意図的に git 管理に含めない（誤って `git add` しない）。
 - 新しいスクリプトを追加するときは、ログ・エラーメッセージ・コメントに個人が特定できる情報（メールアドレス・内部リポジトリ構成・非公開サービスの内部URL等）を書き込んでいないか確認する。
 
@@ -325,6 +387,18 @@ vauban 自体が public リポジトリであることに起因する固有の�
 ## 変更履歴
 
 バージョンは `setup.sh --version` / `python3 scripts/gemini_review.py --version` で確認できる。
+
+### v1.8.0（2026-11-17）— 層をリポごとに選べるようにし、配布の仕組みを手元に移す
+- **Gemini レビューをリポから外し、手元だけのフックにした。** 各リポの `.pre-commit-config.yaml` と `scripts/gemini_review.py` に入れていたため、public リポを clone・フォークした人が `pre-commit install` すると、その人の `GEMINI_API_KEY` で差分が送られうる状態だった。`.git/hooks/pre-push` から vauban 本体のスクリプトを呼ぶ形にし、**既定は無効**、リポごとに `--gemini`（`git config vauban.gemini true`）で有効化する。再実行すると旧版の `scripts/gemini_review.py` と pre-commit の pre-push フックは片付けられる。
+- **Semgrep を再利用ワークフローにした。** 中身は vauban の `.github/workflows/semgrep.yml` に置き、各リポは `uses: <owner>/vauban/...@v1` で呼ぶだけ。タグを動かせば全リポに反映される。
+- **setup.sh に層の選択を追加。** `--gemini` / `--no-gemini`、`--semgrep` / `--no-semgrep`、ecosystem に `none` で Dependabot を外す、`--remove` で vauban を外す。層の状態は生成ファイルの有無で表し、再実行時は引き継ぐ。
+- **CI からの配布（`distribute.yml`）と自動修正（`rescue.yml` / `scripts/rescue.py`）を廃止し、手元の `sync.sh` に置き換えた。** 理由:
+  - 配布先一覧（Actions 変数 `VAUBAN_REPOS`）がログで伏せ字にならず、public の実行ログに private リポ名が出ていた（過去の実行記録はすべて削除済み）。
+  - 一覧を手で管理していたためリネーム等でずれていた。
+  - 全リポに書き込めるトークン（`GH_PAT`）を public リポの secrets に置く必要があり、その失効にも 2 か月気づかなかった（rescue はエラーを握りつぶして成功扱いになっていた）。
+  - CI からはローカルの `.git/hooks` を更新できなかった。
+  - `sync.sh` は手元の clone からマーカーで導入先を探し、自分の認証で push する。`GH_PAT` と `VAUBAN_REPOS` は削除した。
+- 生成ファイルのマーカー行にバージョンを埋め込むようにした（`# vauban managed (v1.8.0) — …`）。
 
 ### v1.7.0（2026-11-17）— フックを動かす Python を 3.10 以上に固定
 - `setup.sh` が素の `python3` を使っていたため、macOS で CommandLineTools の Python 3.9（サポート終了）に pre-commit が入り、フックの `INSTALL_PYTHON` も 3.9 に焼き込まれていた。その結果 Gemini レビューの隔離環境が 3.9 で作られ、google-auth が `FutureWarning: ... Python version 3.9 past its end of life` を出していた。

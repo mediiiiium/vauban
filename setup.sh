@@ -1,47 +1,94 @@
 #!/bin/bash
-# Usage: bash setup.sh <target-repo-path> [ecosystem: npm|pip|none]
+# Usage:
+#   bash setup.sh <target-repo-path> [ecosystem] [options]
+#   bash setup.sh --version
+#
+#   ecosystem: Dependabot の package-ecosystem（npm / pip など）。none で Dependabot を外す。
+#              省略時は、再実行なら今の設定を引き継ぎ、新規なら none。
+#
+# Options:
+#   --gemini / --no-gemini     この PC でこのリポの Gemini レビューを有効 / 無効にする。
+#                              既定は無効。設定は git config vauban.gemini に保存され、
+#                              コミットされない（他の人や他の PC には影響しない）。
+#   --semgrep / --no-semgrep   Semgrep CI を入れる / 外す。
+#                              省略時は、再実行なら今の設定を引き継ぎ、新規なら入れる。
+#   --remove                   このリポから vauban を外す。
 #
 # Examples:
 #   bash setup.sh ~/my-web-app npm
-#   bash setup.sh ~/my-api pip
-#   bash setup.sh ~/my-cli-tool none
+#   bash setup.sh ~/my-api pip --gemini
+#   bash setup.sh ~/my-docs none --no-semgrep
+#   bash setup.sh ~/my-web-app            # 再実行（今の設定のまま最新に更新）
+#
+# 層の状態は「vauban managed マーカー付きのファイルがあるか」で表す。設定ファイルは置かない。
+#   .pre-commit-config.yaml        … vauban 導入済みの目印（detect-secrets。常に入る）
+#   .github/workflows/semgrep.yml  … Semgrep
+#   .github/dependabot.yml         … Dependabot（ecosystem もここから読む）
+# Gemini レビューはリポにコミットしない（フォークした人の差分が知らずに送られるのを防ぐ）。
 
 set -e
 
-# vauban のバージョン。各リポジトリに配るファイルにこの値を埋め込み、
-# どの repo が古い構成のままか分かるようにする。更新は setup.sh を再実行するだけ。
-VAUBAN_VERSION="1.7.0"
-
-TARGET="$1"
-ECOSYSTEM="${2:-none}"
+# vauban のバージョン。生成ファイルのマーカー行に埋め込み、どの repo が古いままか分かるようにする。
+VAUBAN_VERSION="1.8.0"
 VAUBAN_DIR="$(cd "$(dirname "$0")" && pwd)"
+MARKER="vauban managed"
 
-if [ "$TARGET" = "--version" ] || [ "$TARGET" = "-v" ]; then
-  echo "vauban $VAUBAN_VERSION"
-  exit 0
-fi
+# 各リポの semgrep.yml が呼び出す再利用ワークフロー。fork して使う場合は env で差し替える。
+VAUBAN_WORKFLOW_REPO="${VAUBAN_WORKFLOW_REPO:-mediiiiium/vauban}"
+VAUBAN_WORKFLOW_REF="${VAUBAN_WORKFLOW_REF:-v1}"
+
+# Gemini レビュー用の専用 venv（PC に 1 つ。全リポで共有）。
+VAUBAN_VENV="${VAUBAN_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/vauban/venv}"
+
+usage() {
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+TARGET=""
+ECOSYSTEM=""
+GEMINI=""
+SEMGREP=""
+REMOVE=0
+for a in "$@"; do
+  case "$a" in
+    --version|-v) echo "vauban $VAUBAN_VERSION"; exit 0 ;;
+    --help|-h)    usage; exit 0 ;;
+    --gemini)     GEMINI=true ;;
+    --no-gemini)  GEMINI=false ;;
+    --semgrep)    SEMGREP=on ;;
+    --no-semgrep) SEMGREP=off ;;
+    --remove)     REMOVE=1 ;;
+    -*)           echo "Error: 不明なオプション $a"; echo ""; usage; exit 1 ;;
+    *)
+      if [ -z "$TARGET" ]; then TARGET="$a"
+      elif [ -z "$ECOSYSTEM" ]; then ECOSYSTEM="$a"
+      else echo "Error: 引数が多すぎます: $a"; exit 1
+      fi ;;
+  esac
+done
 
 if [ -z "$TARGET" ]; then
-  echo "Usage: bash setup.sh <target-repo-path> [npm|pip|none]"
-  echo "       bash setup.sh --version"
+  usage
   exit 1
 fi
 
-if [ ! -d "$TARGET/.git" ]; then
+if ! TARGET="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null)"; then
   echo "Error: $TARGET is not a git repository"
   exit 1
 fi
 
-TARGET="$(cd "$TARGET" && pwd)"
-echo "Setting up vauban in: $TARGET (ecosystem: $ECOSYSTEM)"
-echo ""
+PCFG="$TARGET/.pre-commit-config.yaml"
+SEMG="$TARGET/.github/workflows/semgrep.yml"
+DEPB="$TARGET/.github/dependabot.yml"
+LEGACY_GEMINI="$TARGET/scripts/gemini_review.py"   # v1.7.0 以前はリポにコピーしていた
 
-echo "vauban version: $VAUBAN_VERSION"
-echo ""
+HOOKS_DIR="$(git -C "$TARGET" rev-parse --git-path hooks)"
+case "$HOOKS_DIR" in /*) ;; *) HOOKS_DIR="$TARGET/$HOOKS_DIR" ;; esac
+PRE_PUSH="$HOOKS_DIR/pre-push"
 
-# 生成ファイルにはマーカーを埋め込む。再実行時、マーカーの無い既存ファイル
-# （＝ユーザーが自前で用意した設定）は黙って消さず、.bak に退避してから上書きする。
-MARKER="vauban managed"
+is_managed() { [ -f "$1" ] && grep -q "$MARKER" "$1" 2>/dev/null; }
+
+# マーカーの無い既存ファイル（＝ユーザーが自前で用意した設定）は黙って消さず、.bak に退避する。
 backup_if_foreign() {
   local f="$1"
   if [ -f "$f" ] && ! grep -q "$MARKER" "$f" 2>/dev/null; then
@@ -51,16 +98,97 @@ backup_if_foreign() {
   fi
 }
 
-# 1. scripts/gemini_review.py
-mkdir -p "$TARGET/scripts"
-backup_if_foreign "$TARGET/scripts/gemini_review.py"
-cp "$VAUBAN_DIR/scripts/gemini_review.py" "$TARGET/scripts/gemini_review.py"
-echo "✓ scripts/gemini_review.py"
+remove_managed() {
+  local f="$1"
+  if is_managed "$f"; then
+    rm "$f"
+    rmdir -p "$(dirname "$f")" 2>/dev/null || true   # 空になったディレクトリも片付ける（リポ直下で止まる）
+    echo "✓ ${f#"$TARGET"/} を削除"
+  fi
+}
 
-# 2. .pre-commit-config.yaml
-backup_if_foreign "$TARGET/.pre-commit-config.yaml"
-cat > "$TARGET/.pre-commit-config.yaml" << 'EOF'
-# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+remove_legacy_gemini() {
+  if is_managed "$LEGACY_GEMINI"; then
+    rm "$LEGACY_GEMINI"
+    rmdir "$TARGET/scripts" 2>/dev/null || true
+    echo "✓ scripts/gemini_review.py を削除（v1.8.0 から Gemini レビューはリポに置かない）"
+  fi
+}
+
+# pre-commit は「自分を動かしている Python」で隔離環境を作り、`pre-commit install` は
+# その Python のパスをフックに焼き込む。macOS の素の python3 は CommandLineTools の 3.9
+# （サポート終了）のことがあるため、3.10 以上を選んで以降すべてに使う。
+# 新しすぎる版は依存の wheel がまだ無いことがあるので、実績のある版から探す。
+pick_python() {
+  local c
+  for c in python3.13 python3.12 python3.14 python3.11 python3.10 python3; do
+    if command -v "$c" >/dev/null 2>&1 \
+      && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      command -v "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# pre-commit が入れたフックか（pre-commit のフックには固定の文言が入っている）
+is_pre_commit_hook() { [ -f "$1" ] && grep -q "generated by pre-commit" "$1" 2>/dev/null; }
+
+# ── --remove ────────────────────────────────────────────────────────────────
+if [ "$REMOVE" = 1 ]; then
+  echo "Removing vauban from: $TARGET"
+  echo ""
+  if PY="$(pick_python)" && "$PY" -c "import pre_commit" 2>/dev/null; then
+    (cd "$TARGET" && "$PY" -m pre_commit uninstall >/dev/null && "$PY" -m pre_commit uninstall --hook-type pre-push >/dev/null) || true
+    echo "✓ pre-commit フックを外しました"
+  fi
+  if is_managed "$PRE_PUSH"; then
+    rm "$PRE_PUSH"
+    echo "✓ Gemini レビューのローカルフックを外しました"
+  fi
+  git -C "$TARGET" config --unset vauban.gemini 2>/dev/null || true
+  remove_managed "$PCFG"
+  remove_managed "$SEMG"
+  remove_managed "$DEPB"
+  remove_legacy_gemini
+  echo ""
+  echo "完了。.secrets.baseline と .semgrepignore は残しています（不要なら手で削除）。"
+  echo "変更をコミット・プッシュしてください。"
+  exit 0
+fi
+
+# ── 層の決定 ────────────────────────────────────────────────────────────────
+INSTALLED=0
+is_managed "$PCFG" && INSTALLED=1
+
+if [ -z "$SEMGREP" ]; then
+  if [ "$INSTALLED" = 1 ] && [ ! -f "$SEMG" ]; then SEMGREP=off; else SEMGREP=on; fi
+fi
+
+if [ -z "$ECOSYSTEM" ]; then
+  if is_managed "$DEPB"; then
+    ECOSYSTEM="$(sed -n 's/.*package-ecosystem: *"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$DEPB" | head -1)"
+  fi
+  ECOSYSTEM="${ECOSYSTEM:-none}"
+fi
+
+if [ -n "$GEMINI" ]; then
+  git -C "$TARGET" config vauban.gemini "$GEMINI"
+fi
+GEMINI_NOW="$(git -C "$TARGET" config --bool vauban.gemini 2>/dev/null || echo false)"
+
+echo "Setting up vauban $VAUBAN_VERSION in: $TARGET"
+echo "  Semgrep: $SEMGREP / Dependabot: $ECOSYSTEM / Gemini（この PC）: $GEMINI_NOW"
+echo ""
+
+# ── 1. 旧版の後片付け ───────────────────────────────────────────────────────
+remove_legacy_gemini
+
+# ── 2. .pre-commit-config.yaml（detect-secrets）──────────────────────────────
+backup_if_foreign "$PCFG"
+cat > "$PCFG" << EOF
+# $MARKER (v$VAUBAN_VERSION) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
+# https://github.com/$VAUBAN_WORKFLOW_REPO
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -68,26 +196,18 @@ repos:
       - id: detect-secrets
         args: ['--baseline', '.secrets.baseline']
         exclude: '(^|/)(node_modules|\.venv|venv|vendor|dist|build|__pycache__)/'
-
-  - repo: local
-    hooks:
-      - id: gemini-review
-        name: Gemini Code Review
-        entry: python scripts/gemini_review.py
-        language: python
-        additional_dependencies: [google-genai]
-        stages: [pre-push]
-        pass_filenames: false
-        always_run: true
-        verbose: true
 EOF
 echo "✓ .pre-commit-config.yaml"
 
-# 3. .github/workflows/semgrep.yml
-mkdir -p "$TARGET/.github/workflows"
-backup_if_foreign "$TARGET/.github/workflows/semgrep.yml"
-cat > "$TARGET/.github/workflows/semgrep.yml" << 'EOF'
-# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+# ── 3. Semgrep ──────────────────────────────────────────────────────────────
+if [ "$SEMGREP" = on ]; then
+  mkdir -p "$TARGET/.github/workflows"
+  backup_if_foreign "$SEMG"
+  # 中身は vauban 側の再利用ワークフローにあり、ここは呼び出すだけ。
+  # 更新は vauban のタグを動かせば全リポに効くので、配布し直す必要がない。
+  cat > "$SEMG" << EOF
+# $MARKER (v$VAUBAN_VERSION) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
+# スキャンの中身は https://github.com/$VAUBAN_WORKFLOW_REPO/blob/main/.github/workflows/semgrep.yml
 name: Semgrep
 on:
   push:
@@ -98,40 +218,13 @@ permissions:
   security-events: write   # SARIF を Security タブへ上げるのに必要
 jobs:
   semgrep:
-    runs-on: ubuntu-latest
-    steps:
-      # 以下は GitHub 公式(first-party)の action。mutable-action-tag は @tag 参照を警告するが、
-      # このファイルは vauban 生成物で SHA pin しても再生成で戻るため、公式 action に限り nosemgrep で抑制する。
-      - uses: actions/checkout@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-      - uses: actions/setup-python@v5  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-        with:
-          python-version: '3.12'
-      - run: pip install 'semgrep~=1.166'   # v1系のパッチ/ルール追従を許容しつつ再現性を確保
-      # 検出があれば --error で job を落とし push/PR をブロックする
-      - name: Semgrep scan
-        run: semgrep scan --config=auto --sarif --output=semgrep.sarif --error
-      # ブロックされても結果は必ず残す。
-      # Security タブへの上げは public/GHAS のみ可。private で未契約だと失敗するが
-      # continue-on-error で job は落とさない（ブロックは scan 側が担う）。
-      - name: Upload SARIF to GitHub Security
-        if: always()
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-        with:
-          sarif_file: semgrep.sarif
-      # private repo でも確認できるよう SARIF を成果物としても残す
-      - name: Upload SARIF artifact
-        if: always()
-        uses: actions/upload-artifact@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
-        with:
-          name: semgrep-sarif
-          path: semgrep.sarif
+    # vauban のタグ参照。SHA pin すると vauban 側の更新が届かなくなるため、意図してタグで呼ぶ。
+    uses: $VAUBAN_WORKFLOW_REPO/.github/workflows/semgrep.yml@$VAUBAN_WORKFLOW_REF  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
 EOF
-echo "✓ .github/workflows/semgrep.yml"
+  echo "✓ .github/workflows/semgrep.yml"
 
-# 3b. .semgrepignore（誤検知の抑制ポイント）
-if [ ! -f "$TARGET/.semgrepignore" ]; then
-  cat > "$TARGET/.semgrepignore" << 'EOF'
+  if [ ! -f "$TARGET/.semgrepignore" ]; then
+    cat > "$TARGET/.semgrepignore" << 'EOF'
 # Semgrep のスキャン対象から除外するパス
 # https://semgrep.dev/docs/ignoring-files-folders-code
 #
@@ -145,16 +238,18 @@ build/
 __pycache__/
 *.min.js
 EOF
-  echo "✓ .semgrepignore（新規生成）"
+    echo "✓ .semgrepignore（新規生成）"
+  fi
 else
-  echo "✓ .semgrepignore（既存を維持）"
+  remove_managed "$SEMG"
 fi
 
-# 4. .github/dependabot.yml（ecosystem 指定時のみ）
+# ── 4. Dependabot ───────────────────────────────────────────────────────────
 if [ "$ECOSYSTEM" != "none" ]; then
-  backup_if_foreign "$TARGET/.github/dependabot.yml"
-  cat > "$TARGET/.github/dependabot.yml" << EOF
-# vauban managed — このファイルは setup.sh が生成します。再実行で上書きされます。
+  mkdir -p "$TARGET/.github"
+  backup_if_foreign "$DEPB"
+  cat > "$DEPB" << EOF
+# $MARKER (v$VAUBAN_VERSION) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
 version: 2
 updates:
   - package-ecosystem: "$ECOSYSTEM"
@@ -170,34 +265,15 @@ updates:
           - "*"
 EOF
   echo "✓ .github/dependabot.yml (ecosystem: $ECOSYSTEM)"
+else
+  remove_managed "$DEPB"
 fi
 
-# 5. pre-commit フックのインストール
+# ── 5. pre-commit（detect-secrets）─────────────────────────────────────────
 cd "$TARGET"
 
-# pre-commit 本体と detect-secrets（baseline 生成に使う）を入れる。
-# Gemini レビューの google-genai は .pre-commit-config.yaml 側の
-# additional_dependencies で pre-commit が隔離環境に入れるため、ここでは入れない。
-#
-# pre-commit は「自分を動かしている Python」で language: python の隔離環境を作り、
-# `pre-commit install` はその Python のパスをフックに焼き込む。macOS では素の
-# `python3` が CommandLineTools の 3.9（サポート終了）を指すことがあり、そのまま使うと
-# Gemini レビューが 3.9 で動いて google-genai がサポート終了の警告を出す。
-# そこで 3.10 以上の Python を選んで以降すべてに使う。新しすぎる版は依存
-# （pydantic-core 等）の wheel がまだ無いことがあるので、実績のある版から優先して探す。
-pick_python() {
-  local c
-  for c in python3.13 python3.12 python3.14 python3.11 python3.10 python3; do
-    if command -v "$c" >/dev/null 2>&1 \
-      && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
-      command -v "$c"
-      return 0
-    fi
-  done
-  return 1
-}
 if ! PY="$(pick_python)"; then
-  echo "✗ Python 3.10 以上が見つかりません（Gemini レビューの隔離環境に必要）。"
+  echo "✗ Python 3.10 以上が見つかりません。"
   echo "  例: brew install python@3.12 を入れてから setup.sh を再実行してください。"
   exit 1
 fi
@@ -237,19 +313,63 @@ if [ ! -f ".secrets.baseline" ]; then
   echo "     以後スキャンから除外される。既存の本物の鍵が紛れていないか必ず棚卸しを:"
   echo "       $PY -m detect_secrets audit .secrets.baseline"
   echo "     本物が見つかったら baseline で蓋をせず、鍵をローテーションすること。"
+  echo "     public リポでは baseline も公開される（ファイル名・行番号・ハッシュ）。"
   echo ""
 else
   echo "✓ .secrets.baseline（既存を維持）"
 fi
 
-"$PY" -m pre_commit install
-"$PY" -m pre_commit install --hook-type pre-push
-echo "✓ pre-commit フック（commit + push）インストール済み"
+"$PY" -m pre_commit install >/dev/null
+echo "✓ pre-commit フック（commit 時の detect-secrets）"
+
+# v1.7.0 以前は pre-commit の pre-push フックで Gemini を動かしていた。外して下の自前フックに置き換える。
+if is_pre_commit_hook "$PRE_PUSH"; then
+  "$PY" -m pre_commit uninstall --hook-type pre-push >/dev/null
+fi
+
+# ── 6. Gemini レビュー（この PC だけのローカルフック）──────────────────────
+# フックは常に入れ、実行時に git config vauban.gemini を見て動くか決める（既定は動かない）。
+# スクリプトは各リポにコピーせず vauban 本体のものを直接呼ぶので、vauban を git pull すれば全リポに効く。
+if [ -f "$PRE_PUSH" ] && ! is_managed "$PRE_PUSH"; then
+  echo "⚠️ 既存の pre-push フック（vauban 管理外）があるため、Gemini レビューのフックは入れません: $PRE_PUSH"
+else
+  mkdir -p "$HOOKS_DIR"
+  cat > "$PRE_PUSH" << EOF
+#!/bin/sh
+# $MARKER (v$VAUBAN_VERSION) — Gemini レビュー。この PC だけのフックで、リポにはコミットされない。
+# 有効化: git config vauban.gemini true   無効化: git config vauban.gemini false
+[ "\$(git config --bool vauban.gemini 2>/dev/null)" = "true" ] || exit 0
+SCRIPT="$VAUBAN_DIR/scripts/gemini_review.py"
+PY="$VAUBAN_VENV/bin/python"
+if [ ! -f "\$SCRIPT" ] || [ ! -x "\$PY" ]; then
+  echo "[vauban] Gemini レビューの実行環境が見つからないためスキップします（vauban の setup.sh をこのリポに --gemini 付きで再実行）" >&2
+  exit 0
+fi
+# レビューは情報表示のみ。失敗しても push は止めない。
+"\$PY" "\$SCRIPT" || true
+exit 0
+EOF
+  chmod +x "$PRE_PUSH"
+  echo "✓ Gemini レビューのローカルフック（現在: $([ "$GEMINI_NOW" = true ] && echo 有効 || echo 無効)）"
+fi
+
+if [ "$GEMINI_NOW" = true ]; then
+  if ! "$VAUBAN_VENV/bin/python" -c "import google.genai" 2>/dev/null; then
+    echo "  Gemini 用の環境を作成中: $VAUBAN_VENV"
+    "$PY" -m venv "$VAUBAN_VENV"
+    "$VAUBAN_VENV/bin/python" -m pip install --quiet 'google-genai>=3,<4'
+  fi
+  echo "✓ Gemini 用の環境: $VAUBAN_VENV"
+fi
 
 echo ""
 echo "完了: $TARGET"
 echo ""
 echo "残りの作業:"
-echo "  1. GEMINI_API_KEY を環境変数に設定する"
-echo "  2. GitHub Marketplace から Qodo Merge を連携する"
-echo "  3. 作成されたファイルをコミット・プッシュする"
+echo "  1. 作成・更新されたファイルをコミット・プッシュする"
+if [ "$GEMINI_NOW" = true ]; then
+  echo "  2. GEMINI_API_KEY を環境変数に設定する（未設定ならレビューはスキップ）"
+else
+  echo "  2. Gemini レビューを使うなら --gemini を付けて再実行（差分が Google の無料枠に送られる点に注意）"
+fi
+echo "  3. 必要なら GitHub Marketplace から Qodo Merge を連携する（vauban の管理外）"

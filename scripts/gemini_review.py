@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# vauban managed — setup.sh が各リポジトリに配布します。再実行で上書きされます。
+# vauban の Gemini レビュー本体。各リポにはコピーせず、setup.sh が入れるローカルの
+# pre-push フック（.git/hooks/pre-push）から、この場所のまま直接呼ばれる。
 import sys
 import os
 import json
 import subprocess
 from datetime import datetime, timezone
 
-# vauban から配布されたバージョン。`--version` でどの構成が入っているか確認できる。
-# setup.sh の VAUBAN_VERSION と揃える。更新は setup.sh の再実行で行う。
-__version__ = "1.7.0"
+# setup.sh の VAUBAN_VERSION と揃える。vauban を git pull すれば全リポに即反映される。
+__version__ = "1.8.0"
 
 # lock ファイル・自動生成物・ビルド成果物は差分から除外する。
 # これらが混ざると 100k 文字制限で実コードが切り捨てられ、レビューから漏れる。
@@ -30,12 +30,11 @@ EXCLUDES = [
     ":(exclude)*.map",
 ]
 
-# このフックは配布先の全リポジトリで git push のたびに Gemini 無料枠(RPD)を1件消費する。
-# 記録が無いと「誰も使っていないのに枠が切れる」状態になり、枠切れ時に有料 API へ
-# フォールバックする別系統（now-on-tap）の課金原因を追えない。
+# このフックは有効にした全リポジトリで git push のたびに Gemini 無料枠(RPD)を1件消費する。
+# 同じ API キーの無料枠を他のツールと共有していると、記録が無いまま枠が切れ、
+# 枠切れ時に有料 API へ切り替わる別のツールの課金原因を追えなくなる。
 # ログを各リポジトリ内に置くと git 管理対象へ紛れ込むため、リポジトリ外の1ファイルに
-# 集約する。dev-dashboard の gemini.usage_logs がこれを読む。
-# 形式は now-on-tap の .gemini_usage.jsonl と同一（ts / source / model / tokens）。
+# 集約する（1 行 1 リクエストの JSON Lines。ts / source / model / tokens）。
 USAGE_LOG = os.environ.get(
     "GEMINI_REVIEW_USAGE_LOG",
     os.path.expanduser("~/.cache/vauban/gemini_usage.jsonl"),

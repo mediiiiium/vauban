@@ -1,0 +1,43 @@
+# vauban の Semgrep 再利用ワークフロー。
+# 各リポの .github/workflows/semgrep.yml（setup.sh が生成する呼び出し用の短いファイル）から
+#   uses: mediiiiium/vauban/.github/workflows/semgrep.yml@v1
+# で呼ばれる。ここを直してタグ v1 を動かせば、全リポのスキャンが一斉に更新される。
+# 逆に、ここを壊すと全リポの CI が同時に落ちるので、変更は main で確認してからタグを動かす。
+name: Semgrep (reusable)
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # SARIF を Security タブへ上げるのに必要（呼び出し側でも許可が要る）
+    steps:
+      # 以下は GitHub 公式(first-party)の action。mutable-action-tag は @tag 参照を警告するが、
+      # 公式 action に限り nosemgrep で抑制する。
+      - uses: actions/checkout@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+      - uses: actions/setup-python@v5  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          python-version: '3.12'
+      - run: pip install 'semgrep~=1.166'   # v1系のパッチ/ルール追従を許容しつつ再現性を確保
+      # 検出があれば --error で job を落とし push/PR をブロックする
+      - name: Semgrep scan
+        run: semgrep scan --config=auto --sarif --output=semgrep.sarif --error
+      # ブロックされても結果は必ず残す。
+      # Security タブへの上げは public/GHAS のみ可。private で未契約だと失敗するが
+      # continue-on-error で job は落とさない（ブロックは scan 側が担う）。
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          sarif_file: semgrep.sarif
+      # private repo でも確認できるよう SARIF を成果物としても残す
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4  # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
