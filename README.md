@@ -10,6 +10,32 @@ Claude Code・Gemini・Qodo Merge と静的解析ツールを組み合わせた�
 
 ---
 
+## 導入手順
+
+**前提:** git、Python 3.10 以上（macOS 標準の 3.9 は不可。Homebrew などで入れる）、GitHub 上のリポジトリ（Semgrep と Dependabot は GitHub Actions / GitHub の機能で動く）。
+
+```bash
+# 1. vauban を手元に clone する（導入先のリポにはコピーされず、ここから呼ばれる）
+git clone https://github.com/mediiiiium/vauban.git ~/vauban
+
+# 2. 導入したいリポに対して setup.sh を実行する
+bash ~/vauban/setup.sh ~/my-web-app npm            # detect-secrets + Semgrep + Dependabot(npm)
+bash ~/vauban/setup.sh ~/my-docs none --no-semgrep # ドキュメント中心なら detect-secrets だけ
+
+# 3. 生成されたファイルを導入先でコミット・プッシュする（setup.sh の最後に案内が出る）
+```
+
+- **Gemini レビュー（pre-push）は既定で無効。** 差分を Google の無料枠に送ってよいリポだけ `--gemini` を付けて実行し、`GEMINI_API_KEY` を環境変数に設定する。この設定はリポにコミットされず、その PC だけに効く。
+- **Qodo Merge（PR レビュー）は vauban の管理外。** 使うなら GitHub Marketplace から連携する。
+- **更新:** vauban を `git pull` してから `bash ~/vauban/sync.sh` を実行すると、手元の導入先を探して最新に揃える（`--commit` / `--push` で反映）。
+- **外す:** `bash ~/vauban/setup.sh ~/my-web-app --remove`
+- **フォークして使う場合:** 各リポの Semgrep は vauban の再利用ワークフローを呼ぶ。自分のフォークを参照させるには、setup.sh の実行時に `VAUBAN_WORKFLOW_REPO=<owner>/vauban` を指定する。
+- private リポで Semgrep の結果を Security タブに載せるには GitHub Advanced Security が要る。無くても検出時は CI が落ちて止まり、結果は Actions の成果物（SARIF）から確認できる。
+
+層の選び方・生成されるファイル・外部に送られるデータは [DESIGN.md のセットアップ手順](DESIGN.md#セットアップ手順) と [データフロー](DESIGN.md#データフロー外部送信) を参照。
+
+---
+
 ## なぜ Vauban か
 
 セバスティアン・ル・プレストル・ド・ヴォーバン（1633–1707）は、ルイ14世に仕えたフランスの軍事技師。星形要塞と稜堡システムによって**「縦深防御（defense in depth）」を体系化した人物**で、本構成の思想そのものを体現している。
