@@ -14,6 +14,7 @@ jobs:
     permissions:
       contents: read
       security-events: write   # SARIF を Security タブへ上げるのに必要（呼び出し側でも許可が要る）
+      actions: read            # upload-sarif が実行情報を読むのに必要（呼び出し側でも許可が要る。無いと private で警告が出る）
     steps:
       # 以下は GitHub 公式(first-party)の action。mutable-action-tag は @tag 参照を警告するが、
       # 公式 action に限り nosemgrep で抑制する。

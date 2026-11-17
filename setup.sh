@@ -29,7 +29,7 @@
 set -e
 
 # vauban のバージョン。生成ファイルのマーカー行に埋め込み、どの repo が古いままか分かるようにする。
-VAUBAN_VERSION="1.8.0"
+VAUBAN_VERSION="1.8.1"
 VAUBAN_DIR="$(cd "$(dirname "$0")" && pwd)"
 MARKER="vauban managed"
 
@@ -216,6 +216,7 @@ on:
 permissions:
   contents: read
   security-events: write   # SARIF を Security タブへ上げるのに必要
+  actions: read            # upload-sarif が実行情報を読むのに必要（無いと private で警告が出る）
 jobs:
   semgrep:
     # vauban のタグ参照。SHA pin すると vauban 側の更新が届かなくなるため、意図してタグで呼ぶ。

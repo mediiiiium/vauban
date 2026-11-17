@@ -8,7 +8,7 @@ import subprocess
 from datetime import datetime, timezone
 
 # setup.sh の VAUBAN_VERSION と揃える。vauban を git pull すれば全リポに即反映される。
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 
 # lock ファイル・自動生成物・ビルド成果物は差分から除外する。
 # これらが混ざると 100k 文字制限で実コードが切り捨てられ、レビューから漏れる。

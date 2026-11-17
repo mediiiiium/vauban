@@ -43,7 +43,7 @@ Claude Pro の範囲内で複数の AI とセキュリティツールを組み�
 **`.pre-commit-config.yaml`（各リポジトリに設置）:**
 
 ```yaml
-# vauban managed (v1.8.0) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
+# vauban managed (v1.8.1) — このファイルは vauban の setup.sh が生成します。再実行で上書きされます。
 # https://github.com/<owner>/vauban
 repos:
   - repo: https://github.com/Yelp/detect-secrets
@@ -387,6 +387,10 @@ vauban 自体が public リポジトリであることに起因する固有の�
 ## 変更履歴
 
 バージョンは `setup.sh --version` / `python3 scripts/gemini_review.py --version` で確認できる。
+
+### v1.8.1（2026-11-17）— Semgrep に `actions: read` を足す
+- private リポで SARIF を上げる手順（`upload-sarif`）が実行情報を読めず、`Resource not accessible by integration` の警告を出していた。検査とブロックには影響しないが、毎回出るので呼び出し側と再利用ワークフローの両方に `actions: read` を足した。
+- 再利用ワークフローが求める権限は呼び出し側の許可を超えられない（超えると起動時に失敗する）。そのため先に全リポの呼び出し側を `sync.sh` で更新し、その後でタグ `v1` を動かす。
 
 ### v1.8.0（2026-11-17）— 層をリポごとに選べるようにし、配布の仕組みを手元に移す
 - **Gemini レビューをリポから外し、手元だけのフックにした。** 各リポの `.pre-commit-config.yaml` と `scripts/gemini_review.py` に入れていたため、public リポを clone・フォークした人が `pre-commit install` すると、その人の `GEMINI_API_KEY` で差分が送られうる状態だった。`.git/hooks/pre-push` から vauban 本体のスクリプトを呼ぶ形にし、**既定は無効**、リポごとに `--gemini`（`git config vauban.gemini true`）で有効化する。再実行すると旧版の `scripts/gemini_review.py` と pre-commit の pre-push フックは片付けられる。
